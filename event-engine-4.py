@@ -1,6 +1,14 @@
+# recods event after before 10 seconds of detection
+#saves metadata in form of json
+#with cool down time and 122 buffer
+
+
 import cv2
 import time
 import threading
+import os
+import json
+from datetime import datetime
 from collections import deque
 from ultralytics import YOLO
 
@@ -49,57 +57,75 @@ class EventEngine:
         self.cooldown_duration = 20.0    
         self.timer_end = 0
         
-        # BRICK 4: Track event IDs
         self.event_counter = 0
+        
+        # --- BRICK 4.5: DIRECTORY MANAGEMENT ---
+        self.output_dir = "events_data"
+        # exist_ok=True prevents an error if the folder already exists
+        os.makedirs(self.output_dir, exist_ok=True)
+        print(f"Event data will be saved to: ./{self.output_dir}/")
 
-    def save_event_data(self, pre_frames, post_frames, event_id):
+    def save_event_data(self, pre_frames, post_frames, event_id, detected_class):
         """
-        This function runs in a BACKGROUND THREAD. 
-        It decodes the bytes, saves an MP4 video, and saves a Snapshot.
+        Runs in a BACKGROUND THREAD.
+        Decodes bytes, saves MP4, Snapshot, and Metadata JSON into the output directory.
         """
-        # Combine pre and post frames chronologically
         all_frames = pre_frames + post_frames
         if not all_frames:
             return
 
-        print(f"[Thread-{event_id}] Starting video export...")
+        print(f"[Thread-{event_id}] Starting background export...")
 
-        # 1. Decode the very first frame just to get the Video Width & Height
-        first_frame_bytes = all_frames[0][0]
-        first_frame_decoded = cv2.imdecode(first_frame_bytes, cv2.IMREAD_COLOR)
+        # 1. Get Video Dimensions from the first frame
+        first_frame_decoded = cv2.imdecode(all_frames[0][0], cv2.IMREAD_COLOR)
         h, w = first_frame_decoded.shape[:2]
 
-        # 2. Calculate the exact FPS based on the timestamps of the captured frames
+        # 2. Calculate exact FPS and duration
         start_time = all_frames[0][1]
         end_time = all_frames[-1][1]
         duration = end_time - start_time
-        
-        # Prevent division by zero
         fps = len(all_frames) / duration if duration > 0 else 20.0 
 
-        # 3. Initialize OpenCV VideoWriter
-        # 'mp4v' is the most compatible codec for OpenCV MP4 creation
+        # 3. Save the MP4 Video inside the folder
         fourcc = cv2.VideoWriter_fourcc(*'mp4v') 
-        video_filename = f"event_{event_id}.mp4"
+        video_filename = os.path.join(self.output_dir, f"event_{event_id}_video.mp4")
         out = cv2.VideoWriter(video_filename, fourcc, fps, (w, h))
 
-        # 4. Decode and write every frame to the video file
         for encoded_img, ts in all_frames:
             frame = cv2.imdecode(encoded_img, cv2.IMREAD_COLOR)
             out.write(frame)
-
         out.release()
-        print(f"[Thread-{event_id}] ✅ Video saved: {video_filename} ({duration:.1f}s at {fps:.1f} FPS)")
+        print(f"[Thread-{event_id}] ✅ Video saved: {video_filename}")
 
-        # 5. Save the Snapshot (The exact frame that triggered the alarm - last frame of pre_event)
+        # 4. Save the Snapshot inside the folder (The exact moment of trigger)
         trigger_frame_bytes = pre_frames[-1][0]
         trigger_frame = cv2.imdecode(trigger_frame_bytes, cv2.IMREAD_COLOR)
-        snapshot_filename = f"event_{event_id}_snapshot.jpg"
+        snapshot_filename = os.path.join(self.output_dir, f"event_{event_id}_snapshot.jpg")
         cv2.imwrite(snapshot_filename, trigger_frame)
         print(f"[Thread-{event_id}] 📸 Snapshot saved: {snapshot_filename}")
 
+        # 5. Create and save Metadata JSON inside the folder
+        metadata = {
+            "event_id": event_id,
+            "object_detected": detected_class,
+            "timestamp_unix": start_time,
+            "timestamp_human": datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S'),
+            "duration_seconds": round(duration, 2),
+            "fps": round(fps, 2),
+            "resolution": f"{w}x{h}",
+            "files": {
+                "video": f"event_{event_id}_video.mp4",
+                "snapshot": f"event_{event_id}_snapshot.jpg"
+            }
+        }
+        
+        json_filename = os.path.join(self.output_dir, f"event_{event_id}_metadata.json")
+        with open(json_filename, 'w') as f:
+            json.dump(metadata, f, indent=4)
+        print(f"[Thread-{event_id}] 📄 Metadata saved: {json_filename}")
+
     def run(self):
-        print("Starting Event Engine (Brick 4: Threaded Video Export)... Press 'q' to quit.")
+        print("Starting Event Engine (Brick 4.5: Organized Output)... Press 'q' to quit.")
         
         while True:
             ret, frame = self.cap.read()
@@ -108,6 +134,7 @@ class EventEngine:
 
             results = self.model(frame, verbose=False)
             detected_target = False
+            current_detected_class = "Unknown"
             
             for r in results:
                 for box in r.boxes:
@@ -115,6 +142,7 @@ class EventEngine:
                     conf = float(box.conf[0])
                     if cls_name in self.target_classes and conf >= self.confidence_threshold:
                         detected_target = True
+                        current_detected_class = cls_name
                         x1, y1, x2, y2 = map(int, box.xyxy[0])
                         cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
                         cv2.putText(frame, f"{cls_name} {conf:.1f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
@@ -153,16 +181,13 @@ class EventEngine:
                 if time.time() >= self.timer_end:
                     print(f"📦 EVENT {self.event_counter} RECORDING COMPLETE! Handing off to background thread...")
                     
-                    # BRICK 4: Spawn Background Thread
-                    # We pass the lists to the thread. We use `args=` to pass variables.
+                    # Pass the detected class to the thread so it can be saved in the JSON
                     thread = threading.Thread(
                         target=self.save_event_data, 
-                        args=(self.pre_event_frames, self.post_event_frames, self.event_counter)
+                        args=(self.pre_event_frames, self.post_event_frames, self.event_counter, current_detected_class)
                     )
                     thread.start()
                     
-                    # Clear the lists in the main thread to free up RAM immediately.
-                    # The background thread has its own reference to the data, so it won't crash.
                     self.pre_event_frames = []
                     self.post_event_frames = []
                     
@@ -185,7 +210,7 @@ class EventEngine:
             cv2.putText(frame, status_text, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2)
 
             display_frame = cv2.resize(frame, (800, 450))
-            cv2.imshow("Event Engine - Brick 4 (Threading)", display_frame)
+            cv2.imshow("Event Engine - Brick 4.5 (Organized Output)", display_frame)
 
             if cv2.waitKey(1) & 0xFF == ord('q'):
                 break
