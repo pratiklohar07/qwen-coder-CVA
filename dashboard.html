@@ -1,0 +1,321 @@
+<!DOCTYPE html>
+<html lang="en" class="h-full bg-slate-900">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AI Surveillance Dashboard</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        /* Custom scrollbar for dark theme */
+        ::-webkit-scrollbar { width: 8px; }
+        ::-webkit-scrollbar-track { background: #0f172a; }
+        ::-webkit-scrollbar-thumb { background: #334155; border-radius: 4px; }
+        .fade-in { animation: fadeIn 0.5s ease-in-out; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+    </style>
+</head>
+<body class="h-full text-slate-200 font-sans">
+
+    <!-- ========================================== -->
+    <!-- LOGIN SCREEN                               -->
+    <!-- ========================================== -->
+    <div id="login-screen" class="hidden min-h-screen flex items-center justify-center p-4">
+        <div class="bg-slate-800 p-8 rounded-xl shadow-2xl border border-slate-700 w-full max-w-md fade-in">
+            <div class="text-center mb-8">
+                <i class="fas fa-shield-halved text-5xl text-red-500 mb-4"></i>
+                <h1 class="text-2xl font-bold text-white">AI Surveillance System</h1>
+                <p class="text-slate-400 text-sm mt-2">Authorized Personnel Only</p>
+            </div>
+            <form id="login-form" class="space-y-6">
+                <div>
+                    <label class="block text-sm font-medium text-slate-300 mb-2">Username</label>
+                    <input type="text" id="username" required class="w-full px-4 py-2 bg-slate-900 border border-slate-600 rounded-lg focus:ring-2 focus:ring-red-500 focus:outline-none text-white">
+                </div>
+                <div>
+                    <label class="block text-sm font-medium text-slate-300 mb-2">Password</label>
+                    <input type="password" id="password" required class="w-full px-4 py-2 bg-slate-900 border border-slate-600 rounded-lg focus:ring-2 focus:ring-red-500 focus:outline-none text-white">
+                </div>
+                <p id="login-error" class="text-red-400 text-sm hidden"></p>
+                <button type="submit" class="w-full bg-red-600 hover:bg-red-700 text-white font-bold py-3 rounded-lg transition duration-200">
+                    <i class="fas fa-right-to-bracket mr-2"></i> Access Dashboard
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- MAIN DASHBOARD SCREEN                      -->
+    <!-- ========================================== -->
+    <div id="dashboard-screen" class="hidden min-h-screen flex flex-col">
+        <!-- Top Navigation -->
+        <nav class="bg-slate-800 border-b border-slate-700 px-6 py-3 flex justify-between items-center shadow-lg">
+            <div class="flex items-center space-x-3">
+                <i class="fas fa-cctv text-red-500 text-2xl"></i>
+                <h1 class="text-xl font-bold text-white tracking-wide">COMMAND CENTER</h1>
+            </div>
+            <div class="flex items-center space-x-4">
+                <span class="text-slate-400 text-sm hidden md:block" id="user-display"></span>
+                <button onclick="logout()" class="bg-slate-700 hover:bg-slate-600 text-slate-200 px-4 py-2 rounded-lg text-sm transition">
+                    <i class="fas fa-sign-out-alt mr-2"></i> Logout
+                </button>
+            </div>
+        </nav>
+
+        <!-- Main Content Area -->
+        <main class="flex-1 p-6 overflow-y-auto">
+            <div class="max-w-7xl mx-auto space-y-8">
+                
+                <!-- Live CCTV Feed Section -->
+                                <!-- Recent Threats / Events Section -->
+                <section class="fade-in">
+                    <div class="flex flex-col md:flex-row justify-between items-start md:items-center mb-6 gap-4">
+                        <h2 class="text-lg font-semibold text-slate-200"><i class="fas fa-bell mr-2 text-yellow-500"></i> Incident Log (Sorted by Event ID)</h2>
+                        <div class="relative w-full md:w-72">
+                            <input type="text" id="search-input" placeholder="Search Event # or Type (e.g. '12' or 'fire')" class="w-full px-4 py-2 bg-slate-800 border border-slate-600 rounded-lg text-white focus:ring-2 focus:ring-red-500 focus:outline-none text-sm pl-10">
+                            <i class="fas fa-search absolute left-3 top-3 text-slate-400"></i>
+                        </div>
+                    </div>
+                    
+                    <div id="events-loading" class="text-center py-10 text-slate-500">
+                        <i class="fas fa-spinner fa-spin text-2xl mb-2"></i>
+                        <p>Fetching secure event logs...</p>
+                    </div>
+
+                    <div id="events-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        <!-- Event Cards will be injected here by JS -->
+                    </div>
+                    
+                    <div id="no-events" class="hidden text-center py-10 text-slate-500 bg-slate-800/50 rounded-xl border border-slate-700 border-dashed">
+                        <i class="fas fa-shield-check text-4xl mb-3 text-green-500"></i>
+                        <p class="text-lg font-semibold text-slate-300">All Clear</p>
+                        <p class="text-sm">No threats detected matching your search.</p>
+                    </div>
+                </section>
+
+                <!-- Recent Threats / Events Section -->
+                <section class="fade-in">
+                    <h2 class="text-lg font-semibold text-slate-200 mb-4"><i class="fas fa-bell mr-2 text-yellow-500"></i> Recent Threat Detections</h2>
+                    
+                    <div id="events-loading" class="text-center py-10 text-slate-500">
+                        <i class="fas fa-spinner fa-spin text-2xl mb-2"></i>
+                        <p>Fetching secure event logs...</p>
+                    </div>
+
+                    <div id="events-grid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                        <!-- Event Cards will be injected here by JS -->
+                    </div>
+                    
+                    <div id="no-events" class="hidden text-center py-10 text-slate-500 bg-slate-800/50 rounded-xl border border-slate-700 border-dashed">
+                        <i class="fas fa-shield-check text-4xl mb-3 text-green-500"></i>
+                        <p class="text-lg font-semibold text-slate-300">All Clear</p>
+                        <p class="text-sm">No threats detected in the recent history.</p>
+                    </div>
+                </section>
+            </div>
+        </main>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- VIDEO MODAL (Popup Player)                 -->
+    <!-- ========================================== -->
+    <div id="video-modal" class="hidden fixed inset-0 bg-black/80 z-50 flex items-center justify-center p-4" onclick="closeModal(event)">
+        <div class="bg-slate-800 rounded-xl max-w-4xl w-full border border-slate-700 shadow-2xl overflow-hidden" onclick="event.stopPropagation()">
+            <div class="flex justify-between items-center p-4 border-b border-slate-700">
+                <h3 class="text-lg font-bold text-white" id="modal-title">Event Playback</h3>
+                <button onclick="closeModal()" class="text-slate-400 hover:text-white text-xl"><i class="fas fa-times"></i></button>
+            </div>
+            <div class="p-4 bg-black">
+                <video id="modal-video" controls class="w-full max-h-[70vh] rounded-lg"></video>
+            </div>
+            <div class="p-4 bg-slate-900 flex flex-wrap gap-4 text-sm">
+                <p class="text-slate-400"><i class="fas fa-clock mr-2"></i> <span id="modal-time" class="text-slate-200"></span></p>
+                <p class="text-slate-400"><i class="fas fa-crosshairs mr-2"></i> Detected: <span id="modal-object" class="text-red-400 font-bold"></span></p>
+            </div>
+        </div>
+    </div>
+
+    <!-- ========================================== -->
+    <!-- JAVASCRIPT LOGIC                           -->
+    <!-- ========================================== -->
+    <script>
+        const API_URL = "http://localhost:8000";
+        const STREAM_URL = "http://localhost:8080/video_feed";
+        let allEvents = []; // Global cache for search filtering
+
+        // --- AUTH & ROUTING ---
+        document.addEventListener('DOMContentLoaded', () => {
+            checkAuth();
+            
+            // Login Listener
+            document.getElementById('login-form').addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const username = document.getElementById('username').value;
+                const password = document.getElementById('password').value;
+                const errorEl = document.getElementById('login-error');
+                errorEl.classList.add('hidden');
+
+                try {
+                    const res = await fetch(`${API_URL}/api/v1/auth/login`, {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ username, password })
+                    });
+                    if (!res.ok) throw new Error("Invalid credentials");
+                    const data = await res.json();
+                    localStorage.setItem('token', data.access_token);
+                    localStorage.setItem('user', username);
+                    checkAuth();
+                } catch (err) {
+                    errorEl.textContent = "Access Denied. Check username/password.";
+                    errorEl.classList.remove('hidden');
+                }
+            });
+
+            // Search Bar Listener
+            document.getElementById('search-input').addEventListener('input', (e) => {
+                const query = e.target.value.toLowerCase().trim();
+                if (!query) {
+                    renderEvents(allEvents);
+                    return;
+                }
+                const filtered = allEvents.filter(ev => 
+                    ev.event_id.toString().includes(query) || 
+                    ev.object_detected.toLowerCase().includes(query)
+                );
+                renderEvents(filtered);
+            });
+        });
+
+        function checkAuth() {
+            const token = localStorage.getItem('token');
+            const user = localStorage.getItem('user');
+            if (token) {
+                document.getElementById('login-screen').classList.add('hidden');
+                document.getElementById('dashboard-screen').classList.remove('hidden');
+                document.getElementById('user-display').textContent = `Logged in as: ${user}`;
+                document.getElementById('live-feed').src = STREAM_URL; 
+                fetchEvents();
+            } else {
+                document.getElementById('dashboard-screen').classList.add('hidden');
+                document.getElementById('login-screen').classList.remove('hidden');
+            }
+        }
+
+        function logout() {
+            localStorage.removeItem('token');
+            localStorage.removeItem('user');
+            document.getElementById('live-feed').src = ""; 
+            checkAuth();
+        }
+
+        // --- FETCH EVENTS ---
+        async function fetchEvents() {
+            const token = localStorage.getItem('token');
+            const loading = document.getElementById('events-loading');
+
+            try {
+                const res = await fetch(`${API_URL}/api/v1/events`, {
+                    headers: { 'Authorization': `Bearer ${token}` }
+                });
+                if (res.status === 401) return logout(); 
+
+                const events = await res.json();
+                loading.classList.add('hidden');
+
+                // STRICT NUMERICAL SORTING: Highest Event ID first
+                allEvents = events.sort((a, b) => b.event_id - a.event_id);
+                renderEvents(allEvents);
+
+            } catch (err) {
+                console.error("Failed to fetch events", err);
+                loading.innerHTML = `<p class="text-red-400">Failed to connect to backend.</p>`;
+            }
+        }
+
+        // --- RENDER LOGIC ---
+        function renderEvents(eventsToRender) {
+            const grid = document.getElementById('events-grid');
+            const noEvents = document.getElementById('no-events');
+
+            if (eventsToRender.length === 0) {
+                noEvents.classList.remove('hidden');
+                grid.innerHTML = '';
+                return;
+            }
+
+            noEvents.classList.add('hidden');
+            grid.innerHTML = ''; 
+
+            eventsToRender.forEach(event => {
+                const card = document.createElement('div');
+                card.className = "bg-slate-800 rounded-xl border border-slate-700 overflow-hidden hover:border-red-500/50 transition shadow-lg fade-in cursor-pointer flex flex-col";
+                card.onclick = () => openModal(event);
+                
+                const isFire = event.object_detected.toLowerCase().includes('fire');
+                const badgeColor = isFire ? 'bg-orange-500' : 'bg-red-600';
+                
+                // Format Event ID to look professional (e.g., #001, #042)
+                const formattedId = String(event.event_id).padStart(3, '0');
+                
+                card.innerHTML = `
+                    <div class="relative">
+                        <img src="${API_URL}${event.snapshot_url}" class="w-full h-48 object-cover" alt="Snapshot">
+                        <div class="absolute top-3 left-3 ${badgeColor} text-white text-xs font-bold px-2 py-1 rounded shadow flex items-center">
+                            <i class="fas fa-exclamation-triangle mr-1"></i> ${event.object_detected.toUpperCase()}
+                        </div>
+                        <div class="absolute top-3 right-3 bg-black/70 text-white text-xs font-mono font-bold px-2 py-1 rounded shadow">
+                            ID: ${formattedId}
+                        </div>
+                    </div>
+                    <div class="p-4 flex-1 flex flex-col justify-between">
+                        <div class="mb-4">
+                            <h3 class="font-bold text-white text-lg mb-1">INCIDENT #${formattedId}</h3>
+                            <p class="text-xs text-slate-400 flex items-center"><i class="far fa-clock mr-2"></i>${event.timestamp_human}</p>
+                        </div>
+                        <button class="w-full bg-slate-700 hover:bg-slate-600 text-slate-200 py-2 rounded-lg text-sm font-medium transition mt-auto">
+                            <i class="fas fa-play-circle mr-2"></i> Play 20s Incident Clip
+                        </button>
+                    </div>
+                `;
+                grid.appendChild(card);
+            });
+        }
+
+        // --- VIDEO MODAL ---
+        function openModal(event) {
+            const modal = document.getElementById('video-modal');
+            const video = document.getElementById('modal-video');
+            const formattedId = String(event.event_id).padStart(3, '0');
+            
+            document.getElementById('modal-title').textContent = `INCIDENT #${formattedId} Playback`;
+            document.getElementById('modal-time').textContent = event.timestamp_human;
+            document.getElementById('modal-object').textContent = event.object_detected;
+            
+            video.src = `${API_URL}${event.video_url}`;
+            video.load();
+            video.play();
+            modal.classList.remove('hidden');
+        }
+
+        function closeModal(event) {
+            if (event && event.target.id !== 'video-modal' && event.type === 'click') return;
+            const modal = document.getElementById('video-modal');
+            const video = document.getElementById('modal-video');
+            video.pause();
+            video.src = "";
+            modal.classList.add('hidden');
+        }
+        
+        // Handle stream offline state
+        document.getElementById('live-feed').onerror = function() {
+            this.classList.add('hidden');
+            document.getElementById('stream-offline').classList.remove('hidden');
+        };
+        document.getElementById('live-feed').onload = function() {
+            this.classList.remove('hidden');
+            document.getElementById('stream-offline').classList.add('hidden');
+        };
+    </script>
+</body>
+</html>
