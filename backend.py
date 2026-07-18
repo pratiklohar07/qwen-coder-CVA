@@ -193,7 +193,7 @@ async def upload_event(
 
 @app.get("/api/v1/events", response_model=List[EventResponse])
 def get_events(current_user: User = Depends(get_current_user), db: Session = Depends(get_db)):
-    events = db.query(Event).order_by(Event.timestamp_unix.desc()).limit(50).all()
+    events = db.query(Event).order_by(Event.event_id.desc()).limit(100).all()
     
     response = []
     for e in events:
