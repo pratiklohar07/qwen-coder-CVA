@@ -12,6 +12,7 @@ from fastapi.responses import StreamingResponse
 from datetime import datetime
 from collections import deque
 from ultralytics import YOLO
+import imageio
 
 # ==========================================
 # BRICK 7: LIVE VIDEO STREAMING SERVER
@@ -162,15 +163,29 @@ class EventEngine:
         self.stream_server = LiveStreamServer(port=8080)
         self.stream_server.start()
 
+    # Inside event_engine_core.py -> upload_to_backend method
+
     def upload_to_backend(self, video_path, snapshot_path, metadata_dict):
         try:
             with open(video_path, 'rb') as vf, open(snapshot_path, 'rb') as sf:
                 files = {'video': vf, 'snapshot': sf}
                 data = {'metadata': json.dumps(metadata_dict)}
-                response = requests.post(self.backend_url, files=files, data=data, timeout=30)
+                
+                # --- ADD THIS LINE FOR SECURITY ---
+                headers = {'X-API-Key': 'super_secret_edge_key_123'}
+                
+                response = requests.post(
+                    self.backend_url, 
+                    files=files, 
+                    data=data, 
+                    headers=headers, # <--- Pass the headers here
+                    timeout=30
+                )
                 if response.status_code == 200: print("[Upload] ✅ SUCCESS")
-        except Exception as e: print(f"[Upload] ❌ FAILED: {e}")
+        except Exception as e: 
+            print(f"[Upload] ❌ FAILED: {e}")
 
+    
     def save_event_data(self, pre_frames, post_frames, event_id, detected_class):
         all_frames = pre_frames + post_frames
         if not all_frames: return
@@ -182,9 +197,24 @@ class EventEngine:
         fps = len(all_frames) / duration if duration > 0 else 20.0 
 
         video_path = os.path.join(self.output_dir, f"event_{event_id}_video.mp4")
-        out = cv2.VideoWriter(video_path, cv2.VideoWriter_fourcc(*'mp4v'), fps, (w, h))
-        for encoded_img, ts in all_frames: out.write(cv2.imdecode(encoded_img, cv2.IMREAD_COLOR))
-        out.release()
+        
+        # --- BRICK 9 FIX: BROWSER COMPATIBLE H.264 ENCODING ---
+        # yuv420p is strictly required for Apple devices (Safari/iOS) and Chrome to play the video
+        writer = imageio.get_writer(
+            video_path, 
+            fps=fps, 
+            codec='libx264',
+            output_params=['-preset', 'fast', '-pix_fmt', 'yuv420p']
+        )
+
+        for encoded_img, ts in all_frames:
+            frame = cv2.imdecode(encoded_img, cv2.IMREAD_COLOR)
+            # OpenCV uses BGR color space, but web/video standards use RGB
+            frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+            writer.append_data(frame_rgb)
+            
+        writer.close()
+        # -------------------------------------------------------
 
         trigger_frame = cv2.imdecode(pre_frames[-1][0], cv2.IMREAD_COLOR)
         snapshot_path = os.path.join(self.output_dir, f"event_{event_id}_snapshot.jpg")
@@ -196,8 +226,11 @@ class EventEngine:
             "timestamp_human": datetime.fromtimestamp(start_time).strftime('%Y-%m-%d %H:%M:%S'),
             "duration_seconds": round(duration, 2), "fps": round(fps, 2), "resolution": f"{w}x{h}"
         }
-        with open(os.path.join(self.output_dir, f"event_{event_id}_metadata.json"), 'w') as f: json.dump(metadata, f, indent=4)
-        if self.enable_upload: self.upload_to_backend(video_path, snapshot_path, metadata)
+        with open(os.path.join(self.output_dir, f"event_{event_id}_metadata.json"), 'w') as f: 
+            json.dump(metadata, f, indent=4)
+            
+        if self.enable_upload: 
+            self.upload_to_backend(video_path, snapshot_path, metadata)
 
     def run(self):
         print("Starting Edge Engine (AI + CCTV + Live Stream)... Press 'q' to quit.")
