@@ -54,18 +54,24 @@ class LiveStreamServer:
     def start(self):
         config = uvicorn.Config(self.app, host="0.0.0.0", port=self.port, log_level="warning")
         server = uvicorn.Server(config)
-        thread = threading.Thread(target=server.run, daemon=True)
+        
+        def run_server():
+            # FIX: Properly initialize asyncio event loop for Windows background threads
+            asyncio.set_event_loop(asyncio.new_event_loop())
+            server.run()
+        
+        # FIX: Changed target from server.run to run_server
+        thread = threading.Thread(target=run_server, daemon=True)
         thread.start()
         print(f"📺 Live Stream Server started at http://localhost:{self.port}/video_feed")
 
 # ==========================================
-# BRICK 6: 24/7 CCTV RECORDER (FIXED FOR UNIFORM 60s CHUNKS)
+# BRICK 6: 24/7 CCTV RECORDER
 # ==========================================
 class CCTVRecorder:
     def __init__(self, output_dir="cctv_archive", segment_minutes=1, target_fps=20.0, resolution=(854, 480)):
         self.output_dir = output_dir
         os.makedirs(self.output_dir, exist_ok=True)
-        # FIX: Increased queue size massively to prevent dropping frames during AI spikes
         self.queue = queue.Queue(maxsize=1000) 
         self.segment_seconds = segment_minutes * 60
         self.fps = target_fps
@@ -103,7 +109,6 @@ class CCTVRecorder:
     def add_frame(self, frame):
         frame_resized = cv2.resize(frame, self.resolution)
         try: 
-            # FIX: Blocking put ensures we NEVER drop frames, guaranteeing uniform chunk durations
             self.queue.put(frame_resized, timeout=0.5)
         except queue.Full: 
             pass 
@@ -131,14 +136,10 @@ class RingBuffer:
 
 class EventEngine:
     def __init__(self, video_source=0):
-        # --- FIX: Force DirectShow backend for Windows to prevent MSMF crashes ---
         if isinstance(video_source, int):
-            # If it's a camera index (0, 1, 2), use CAP_DSHOW
             self.cap = cv2.VideoCapture(video_source, cv2.CAP_DSHOW)
         else:
-            # If it's a video file path or RTSP URL, use default
             self.cap = cv2.VideoCapture(video_source)
-        # ------------------------------------------------------------------------
 
         if not self.cap.isOpened(): 
             raise ValueError(f"Could not open video source: {video_source}")
@@ -155,7 +156,6 @@ class EventEngine:
         self.post_record_duration, self.cooldown_duration = 10.0, 20.0    
         self.timer_end = 0
         
-        # --- FIX: PERSISTENT EVENT COUNTER ---
         self.counter_file = "event_counter.txt"
         if os.path.exists(self.counter_file):
             with open(self.counter_file, 'r') as f:
@@ -172,10 +172,8 @@ class EventEngine:
 
         self.cctv_recorder = CCTVRecorder(segment_minutes=1) 
         
-        # --- BRICK 7: INITIALIZE LIVE STREAM SERVER ---
         self.stream_server = LiveStreamServer(port=8080)
         self.stream_server.start()
-    
 
     def upload_to_backend(self, video_path, snapshot_path, metadata_dict):
         try:
@@ -193,7 +191,6 @@ class EventEngine:
         all_frames = pre_frames + post_frames
         if not all_frames: return
 
-        # FIX: Create dedicated folder for this specific event
         event_folder_name = f"event_{event_id:03d}"
         event_dir = os.path.join(self.output_dir, event_folder_name)
         os.makedirs(event_dir, exist_ok=True)
@@ -209,7 +206,6 @@ class EventEngine:
         video_filename = "video.mp4"
         video_path = os.path.join(event_dir, video_filename)
         
-        # Write Video (with fallback)
         if HAS_IMAGEIO:
             writer = imageio.get_writer(video_path, fps=fps, codec='libx264', output_params=['-preset', 'fast', '-pix_fmt', 'yuv420p'])
             for encoded_img, ts in all_frames:
@@ -221,13 +217,11 @@ class EventEngine:
             for encoded_img, ts in all_frames: out.write(cv2.imdecode(encoded_img, cv2.IMREAD_COLOR))
             out.release()
 
-        # Write Snapshot
         trigger_frame = cv2.imdecode(pre_frames[-1][0], cv2.IMREAD_COLOR)
         snapshot_filename = "snapshot.jpg"
         snapshot_path = os.path.join(event_dir, snapshot_filename)
         cv2.imwrite(snapshot_path, trigger_frame)
 
-        # Write Metadata
         metadata = {
             "event_id": event_id, "object_detected": detected_class,
             "timestamp_unix": start_time,
@@ -242,63 +236,74 @@ class EventEngine:
 
     def run(self):
         print("Starting Edge Engine... Press 'q' to quit.")
-        while True:
-            ret, frame = self.cap.read()
-            if not ret: break
+        # FIX: Added try/except/finally to catch silent crashes and keep terminal open
+        try:
+            while True:
+                ret, frame = self.cap.read()
+                if not ret: 
+                    print("❌ CRITICAL: Camera feed lost (ret=False). The camera disconnected or driver crashed.")
+                    break
 
-            self.cctv_recorder.add_frame(frame)
-            results = self.model(frame, verbose=False)
-            detected_target = False
-            current_detected_class = "Unknown"
-            for r in results:
-                for box in r.boxes:
-                    cls_name = self.model.names[int(box.cls[0])]
-                    conf = float(box.conf[0])
-                    if cls_name in self.target_classes and conf >= self.confidence_threshold:
-                        detected_target = True
-                        current_detected_class = cls_name
-                        x1, y1, x2, y2 = map(int, box.xyxy[0])
-                        cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                self.cctv_recorder.add_frame(frame)
+                results = self.model(frame, verbose=False)
+                detected_target = False
+                current_detected_class = "Unknown"
+                for r in results:
+                    for box in r.boxes:
+                        cls_name = self.model.names[int(box.cls[0])]
+                        conf = float(box.conf[0])
+                        if cls_name in self.target_classes and conf >= self.confidence_threshold:
+                            detected_target = True
+                            current_detected_class = cls_name
+                            x1, y1, x2, y2 = map(int, box.xyxy[0])
+                            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
 
-            status_text, status_color = "", (0, 255, 0)
-            if self.current_state == self.STATE_IDLE:
-                self.ring_buffer.add_frame(frame)
-                status_text = "STATUS: SCANNING (IDLE)"
-                if detected_target: self.consecutive_detections += 1
-                else: self.consecutive_detections = 0 
-                if self.consecutive_detections >= self.required_consecutive_frames:
-                    self.event_counter += 1
-                    with open(self.counter_file, 'w') as f:
-                        f.write(str(self.event_counter))
-                    
-                    
-                    self.pre_event_frames = self.ring_buffer.get_encoded_frames()
-                    self.post_event_frames = [] 
-                    self.timer_end = time.time() + self.post_record_duration
-                    self.current_state = self.STATE_POST_RECORDING
-            elif self.current_state == self.STATE_POST_RECORDING:
-                _, encoded_img = cv2.imencode('.jpg', frame)
-                self.post_event_frames.append((encoded_img, time.time()))
-                status_text = "STATUS: RECORDING POST-EVENT..."
-                status_color = (0, 165, 255)
-                if time.time() >= self.timer_end:
-                    threading.Thread(target=self.save_event_data, args=(self.pre_event_frames, self.post_event_frames, self.event_counter, current_detected_class)).start()
-                    self.pre_event_frames = self.post_event_frames = []
-                    self.timer_end = time.time() + self.cooldown_duration
-                    self.current_state = self.STATE_COOLDOWN
-            elif self.current_state == self.STATE_COOLDOWN:
-                status_text = "STATUS: COOLDOWN"
-                status_color = (0, 255, 255)
-                if time.time() >= self.timer_end: self.current_state = self.STATE_IDLE
+                status_text, status_color = "", (0, 255, 0)
+                if self.current_state == self.STATE_IDLE:
+                    self.ring_buffer.add_frame(frame)
+                    status_text = "STATUS: SCANNING (IDLE)"
+                    if detected_target: self.consecutive_detections += 1
+                    else: self.consecutive_detections = 0 
+                    if self.consecutive_detections >= self.required_consecutive_frames:
+                        self.event_counter += 1
+                        with open(self.counter_file, 'w') as f:
+                            f.write(str(self.event_counter))
+                        
+                        self.pre_event_frames = self.ring_buffer.get_encoded_frames()
+                        self.post_event_frames = [] 
+                        self.timer_end = time.time() + self.post_record_duration
+                        self.current_state = self.STATE_POST_RECORDING
+                elif self.current_state == self.STATE_POST_RECORDING:
+                    _, encoded_img = cv2.imencode('.jpg', frame)
+                    self.post_event_frames.append((encoded_img, time.time()))
+                    status_text = "STATUS: RECORDING POST-EVENT..."
+                    status_color = (0, 165, 255)
+                    if time.time() >= self.timer_end:
+                        threading.Thread(target=self.save_event_data, args=(self.pre_event_frames, self.post_event_frames, self.event_counter, current_detected_class)).start()
+                        self.pre_event_frames = self.post_event_frames = []
+                        self.timer_end = time.time() + self.cooldown_duration
+                        self.current_state = self.STATE_COOLDOWN
+                elif self.current_state == self.STATE_COOLDOWN:
+                    status_text = "STATUS: COOLDOWN"
+                    status_color = (0, 255, 255)
+                    if time.time() >= self.timer_end: self.current_state = self.STATE_IDLE
 
-            cv2.putText(frame, f"State: {self.current_state} | Events: {self.event_counter}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            cv2.putText(frame, status_text, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2)
-            self.stream_server.update_frame(frame)
+                cv2.putText(frame, f"State: {self.current_state} | Events: {self.event_counter}", (10, 30), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                cv2.putText(frame, status_text, (10, 70), cv2.FONT_HERSHEY_SIMPLEX, 0.8, status_color, 2)
+                self.stream_server.update_frame(frame)
 
-            display_frame = cv2.resize(frame, (800, 450))
-            cv2.imshow("Hybrid Engine", display_frame)
-            if cv2.waitKey(1) & 0xFF == ord('q'): break
-        self.cleanup()
+                display_frame = cv2.resize(frame, (800, 450))
+                cv2.imshow("Hybrid Engine", display_frame)
+                if cv2.waitKey(1) & 0xFF == ord('q'): break
+                
+        except Exception as e:
+            print(f"\n❌ FATAL ERROR in main loop: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            self.cleanup()
+            print("\n⚠️ Engine stopped. Press ENTER to close terminal...")
+            input() # Prevents terminal from instantly closing
 
     def cleanup(self):
         self.cctv_recorder.stop()
