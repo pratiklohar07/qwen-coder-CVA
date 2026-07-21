@@ -145,13 +145,13 @@ class EventEngine:
             raise ValueError(f"Could not open video source: {video_source}")
 
         self.ring_buffer = RingBuffer(buffer_seconds=10)
-        self.model = YOLO('yolov8n.pt') 
-        self.target_classes = ['person'] 
-        self.confidence_threshold = 0.60 
+        self.model = YOLO('best.pt') 
+        self.target_classes = ['Fire-Detection', 'fire'] 
+        self.confidence_threshold = 0.50
 
         self.STATE_IDLE, self.STATE_POST_RECORDING, self.STATE_COOLDOWN = 'IDLE', 'POST_RECORDING', 'COOLDOWN'
         self.current_state = self.STATE_IDLE
-        self.consecutive_detections, self.required_consecutive_frames = 0, 8 
+        self.consecutive_detections, self.required_consecutive_frames = 0, 12 
         self.pre_event_frames, self.post_event_frames = [], []
         self.post_record_duration, self.cooldown_duration = 10.0, 20.0    
         self.timer_end = 0
