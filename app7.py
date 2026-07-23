@@ -13,7 +13,7 @@ from datetime import datetime
 from collections import deque
 from ultralytics import YOLO
 
-# Graceful fallback for video encoding
+# Graceful fallback for browser-compatible video encoding
 try:
     import imageio
     HAS_IMAGEIO = True
@@ -55,12 +55,11 @@ class LiveStreamServer:
         config = uvicorn.Config(self.app, host="0.0.0.0", port=self.port, log_level="warning")
         server = uvicorn.Server(config)
         
+        # FIX: Properly initialize asyncio event loop for Windows background threads
         def run_server():
-            # FIX: Properly initialize asyncio event loop for Windows background threads
             asyncio.set_event_loop(asyncio.new_event_loop())
             server.run()
         
-        # FIX: Changed target from server.run to run_server
         thread = threading.Thread(target=run_server, daemon=True)
         thread.start()
         print(f"📺 Live Stream Server started at http://localhost:{self.port}/video_feed")
@@ -136,6 +135,7 @@ class RingBuffer:
 
 class EventEngine:
     def __init__(self, video_source=0):
+        # FIX: Force DirectShow backend for Windows to prevent 5-second MSMF crashes
         if isinstance(video_source, int):
             self.cap = cv2.VideoCapture(video_source, cv2.CAP_DSHOW)
         else:
@@ -145,17 +145,23 @@ class EventEngine:
             raise ValueError(f"Could not open video source: {video_source}")
 
         self.ring_buffer = RingBuffer(buffer_seconds=10)
+        
+        # --- CUSTOM AI BRAIN & FILTERS ---
         self.model = YOLO('best.pt') 
         self.target_classes = ['Fire-Detection', 'fire'] 
-        self.confidence_threshold = 0.50
+        self.confidence_threshold = 0.50  # Bumped up to ignore low-confidence lights
+        # -------------------------------
 
         self.STATE_IDLE, self.STATE_POST_RECORDING, self.STATE_COOLDOWN = 'IDLE', 'POST_RECORDING', 'COOLDOWN'
         self.current_state = self.STATE_IDLE
-        self.consecutive_detections, self.required_consecutive_frames = 0, 12 
+        self.consecutive_detections = 0
+        self.required_consecutive_frames = 9 # Requires 12 solid frames of detection to prove flickering
+        
         self.pre_event_frames, self.post_event_frames = [], []
         self.post_record_duration, self.cooldown_duration = 10.0, 20.0    
         self.timer_end = 0
         
+        # Persistent Counter
         self.counter_file = "event_counter.txt"
         if os.path.exists(self.counter_file):
             with open(self.counter_file, 'r') as f:
@@ -236,7 +242,6 @@ class EventEngine:
 
     def run(self):
         print("Starting Edge Engine... Press 'q' to quit.")
-        # FIX: Added try/except/finally to catch silent crashes and keep terminal open
         try:
             while True:
                 ret, frame = self.cap.read()
@@ -248,15 +253,29 @@ class EventEngine:
                 results = self.model(frame, verbose=False)
                 detected_target = False
                 current_detected_class = "Unknown"
+                
+                # --- SIZE & AREA FILTER ---
+                frame_height, frame_width = frame.shape[:2]
+                frame_area = frame_width * frame_height
+                MIN_AREA_RATIO = 0.005  # Ignore tiny LEDs (min 0.5% of screen)
+                MAX_AREA_RATIO = 0.40   # Ignore massive ceiling lights (max 40% of screen)
+                
                 for r in results:
                     for box in r.boxes:
                         cls_name = self.model.names[int(box.cls[0])]
                         conf = float(box.conf[0])
+                        
                         if cls_name in self.target_classes and conf >= self.confidence_threshold:
-                            detected_target = True
-                            current_detected_class = cls_name
                             x1, y1, x2, y2 = map(int, box.xyxy[0])
-                            cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                            
+                            box_area = (x2 - x1) * (y2 - y1)
+                            area_ratio = box_area / frame_area
+                            
+                            if MIN_AREA_RATIO <= area_ratio <= MAX_AREA_RATIO:
+                                detected_target = True
+                                current_detected_class = cls_name
+                                cv2.rectangle(frame, (x1, y1), (x2, y2), (0, 0, 255), 2)
+                                cv2.putText(frame, f"{cls_name} {conf:.2f}", (x1, y1 - 10), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 0, 255), 2)
 
                 status_text, status_color = "", (0, 255, 0)
                 if self.current_state == self.STATE_IDLE:
@@ -303,7 +322,7 @@ class EventEngine:
         finally:
             self.cleanup()
             print("\n⚠️ Engine stopped. Press ENTER to close terminal...")
-            input() # Prevents terminal from instantly closing
+            input() 
 
     def cleanup(self):
         self.cctv_recorder.stop()
